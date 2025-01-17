@@ -76,17 +76,6 @@ def delete_project(project_id):
 
 @app.route('/upload/<string:project_name>', methods=['POST'])
 def upload_files(project_name):
-    #files = request.files.getlist('files')
-    #file_names = [secure_filename(file.filename) for file in files if file]
-    #filters = request.form.get('filters')
-    #project_name = project_name
-    #response_data = {
-    #    'files': file_names,
-    #    'filters': filters,
-    #    'project_name': project_name
-    #}
-    #return jsonify(response_data)
-
     if 'files' not in request.files:
         return jsonify({"error": "No files part in the request"}), 400
 
