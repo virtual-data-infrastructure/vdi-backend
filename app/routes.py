@@ -7,10 +7,59 @@ from app import app, db, CORS
 from app.models import Project, LogFile, FilteredFile
 import json
 import os
+import re
 import datetime
 import threading
 import hashlib
 from .processing import process_file
+
+def is_open_call(line):
+    decoded_line = line.decode('utf-8')
+    row = re.split(r'\s+', decoded_line)
+    if re.search('^(open|openat|open64|fopen|fopenat|fopen64)$', row[12]):
+        return True
+    return False
+
+def get_program_name(line):
+    decoded_line = line.decode('utf-8')
+    row = re.split(r'\s+', decoded_line)
+    return row[8]
+
+def get_file_name(line):
+    decoded_line = line.decode('utf-8')
+    row = re.split(r'\s+', decoded_line)
+    if re.search('^(open|open64|fopen|fopen64)$', row[12]):
+        return row[13]
+    if re.search('^(openat|fopenat)$', row[12]):
+        return row[14]
+    else:
+        return 'NONE'
+
+def get_access_mode(line):
+    decoded_line = line.decode('utf-8')
+    row = re.split(r'\s+', decoded_line)
+    if re.search('^(open|open64|fopen|fopen64)$', row[12]):
+        raw_access_mode = row[14]
+    elif re.search('^(openat|fopenat)$', row[12]):
+        raw_access_mode = row[15]
+    else:
+        return 'UNKNOWN'
+    if re.search('^(open|open64|openat)$', row[12]):
+        # raw_access_mode contains 'O_RDWR' -> return 'write'
+        if 'O_RDWR' in raw_access_mode:
+            return 'write'
+        # raw_access_mode contains 'O_RDONLY' -> return 'read'
+        if 'O_RDONLY' in raw_access_mode:
+            return 'read'
+    elif re.search('^(fopen|fopen64|fopenat)$', row[12]):
+        # raw_access_mode contains 'w' -> return 'write'
+        if 'w' in raw_access_mode:
+            return 'write'
+        # raw_access_mode contains 'r' -> return 'read'
+        if 'r' in raw_access_mode:
+            return 'read'
+
+    return 'UNKNOWN'
 
 def allowed_log_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'txt', 'csv', 'json', 'log'}
@@ -50,10 +99,79 @@ def ensure_upload_directory_exists():
     if not os.path.exists(current_app.config['UPLOAD_DIRECTORY']):
         os.makedirs(current_app.config['UPLOAD_DIRECTORY'])
 
+@app.route('/dataflow/<int:project_id>', methods=['GET'])
+def get_dataflow(project_id):
+    project = Project.query.get(project_id)
+    if project is None:
+        return jsonify({'error': 'Project not found'}), 404
+    print(f'project name: {project.name}')
+
+    # get processed log files if any
+    nodes = []
+    edges = []
+    edge_counter = 1
+    node_counter = 1
+    raw_log_files = LogFile.query.filter_by(project_id=project.id).all()
+    print(f'number of raw log files: {len(raw_log_files)}')
+    for index, raw_log in enumerate(raw_log_files):
+        print(f'processing log file #{index+1}: {raw_log.file_name}')
+        processed_log_file = FilteredFile.query.filter_by(log_file_id=raw_log.id).first()
+
+        # for each log file line determine the program, filepath and access mode
+        file_path = processed_log_file.filtered_file_path
+        programs = {}
+        files = {}
+        read_ops = {}
+        write_ops = {}
+        with open(file_path, 'rb') as file:
+            for line in file:
+                # check that call is one of open{64,at} or fopen{64,at}
+                if not is_open_call(line):
+                    continue
+
+                program_name_in_log = f'log-{index}##{get_program_name(line)}'
+                if program_name_in_log not in programs:
+                    # if program new create a new program node
+                    programs[program_name_in_log] = node_counter
+                    #nodes.append({ 'id': f'{node_counter}', 'label': program_name_in_log, 'type': 'program', 'position': { 'x': 0, 'y': 0 }, 'data': { 'status': 'null' } })
+                    nodes.append({ 'id': f'{node_counter}', 'label': program_name_in_log, 'type': 'program', 'data': { 'status': 'null' } })
+                    node_counter = node_counter + 1
+
+                file_path_in_log = f'log-{index}##{get_file_name(line)}'
+                print(f'file_path_in_log: "{file_path_in_log}"')
+                if file_path_in_log not in files:
+                    # if file new create a new file node
+                    files[file_path_in_log] = node_counter
+                    #nodes.append({ 'id': f'{node_counter}', 'label': file_path_in_log, 'type': 'file', 'position': { 'x': 0, 'y': 0 }, 'data': { 'status': 'null' } })
+                    nodes.append({ 'id': f'{node_counter}', 'label': file_path_in_log, 'type': 'file', 'data': { 'status': 'null' } })
+                    node_counter = node_counter + 1
+
+                access_mode = get_access_mode(line)
+                print(f'access_mode: "{access_mode}"')
+                if access_mode == 'read':
+                    # if access == read, create an edge from the file to the program node
+                    # we assume that each log only represents a single program that would read the file
+                    if file_path_in_log not in read_ops:
+                        read_ops[file_path_in_log] = edge_counter
+                        edges.append({ 'id': f'ed{edge_counter}', 'source': files[file_path_in_log], 'target': programs[program_name_in_log] })
+                        edge_counter = edge_counter + 1
+                if access_mode == 'write':
+                    # if access == write, create an edge from the program to the file node
+                    # we assume that each log only represents a single program that would write the file
+                    if file_path_in_log not in write_ops:
+                        write_ops[file_path_in_log] = edge_counter
+                        edges.append({ 'id': f'ed{edge_counter}', 'source': programs[program_name_in_log], 'target': files[file_path_in_log] })
+                        edge_counter = edge_counter + 1
+
+    # return both arrays: nodes and edges
+    print(f'nodes: {nodes}')
+    print(f'edges: {edges}')
+    return jsonify({'nodes': nodes, 'edges': edges}), 200
+
 @app.route('/projects', methods=['GET'])
 def get_projects():
     projects = Project.query.all()
-    return jsonify([{'id': project.id, 'name': project.name} for project in projects])
+    return jsonify([{'id': project.id, 'name': project.name} for project in projects]), 200
 
 @app.route('/projects', methods=['POST'])
 def create_project():
