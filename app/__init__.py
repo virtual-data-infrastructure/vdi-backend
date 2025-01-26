@@ -12,6 +12,7 @@ CORS(app, resources={
     r"/upload/*": {"origins": "https://vdi.nessi.no:5815"},
     r"/views/*": {"origins": "https://vdi.nessi.no:5815"},
     r"/data/*": {"origins": "https://vdi.nessi.no:5815"},
+    r"/download/*": {"origins": "*"},
 })
 
 app.config.from_object(Config)
