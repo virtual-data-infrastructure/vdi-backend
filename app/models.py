@@ -1,6 +1,7 @@
 # models.py
 from app import db
 
+# Project, LogFile and FilteredFile are used in the DataFlowGraph component
 class Project(db.Model):
     __tablename__ = 'projects'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
@@ -35,3 +36,24 @@ class FilteredFile(db.Model):
     filtered_file_path = db.Column(db.String, nullable=False)
     checksum = db.Column(db.String(64), nullable=True)
     processed_time = db.Column(db.DateTime, nullable=True)
+
+# View and Data are used in the Virtual Data Infrastructure component
+class View(db.Model):
+    __tablename__ = 'view'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    # relationship to Data table
+    data = db.relationship('Data', backref='view', cascade='all, delete-orphan')
+
+    def __repr__(self):
+        return f'<View {self.name}>'
+
+class Data(db.Model):
+    __tablename__ = 'data'
+    id = db.Column(db.Integer, primary_key=True)
+    view_id = db.Column(db.Integer, db.ForeignKey('view.id', ondelete='CASCADE'), nullable=False)
+    filepath = db.Column(db.String(200), nullable=False)
+    stored_path = db.Column(db.String(200), nullable=False)
+
+    def __repr__(self):
+        return f'<Data {self.filepath}>'
