@@ -1,10 +1,9 @@
 # routes.py
 from flask import request, jsonify, current_app
-from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 from app import app, db, CORS
-from app.models import Project, LogFile, FilteredFile
+from app.models import Project, LogFile, FilteredFile, View, Data
 import json
 import os
 import re
@@ -299,3 +298,28 @@ def delete_log_file(project_id, file_id):
         os.remove(file.file_path)
 
     return jsonify({'message': 'Log file(s) deleted successfully'}), 200
+
+# routes for table View
+@app.route('/views', methods=['GET'])
+def get_views():
+    views = View.query.all()
+    return jsonify([{'id': view.id, 'name': view.name} for view in views]), 200
+
+@app.route('/views', methods=['POST'])
+def create_view():
+    data = request.json
+    if 'name' not in data or data['name'] == '':
+        return jsonify({'error': 'Invalid view name'}), 400
+    new_view = View(name=data['name'])
+    db.session.add(new_view)
+    db.session.commit()
+    return jsonify({'id': new_view.id, 'name': new_view.name}), 201
+
+@app.route('/views/<int:view_id>', methods=['DELETE'])
+def delete_view(view_id):
+    view = View.query.get(view_id)
+    if view is None:
+        return jsonify({'error': 'View not found'}), 404
+    db.session.delete(view)
+    db.session.commit()
+    return jsonify({'message': 'View deleted successfully'}), 200
