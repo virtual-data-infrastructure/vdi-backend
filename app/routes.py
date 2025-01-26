@@ -16,7 +16,7 @@ from .processing import process_file
 def is_open_call(line):
     decoded_line = line.decode('utf-8')
     row = re.split(r'\s+', decoded_line)
-    if re.search('^(open|openat|open64|fopen|fopenat|fopen64)$', row[12]):
+    if re.search('^(open|openat|open64|fopen|fopenat|fopen64|freopen)$', row[12]):
         return True
     return False
 
@@ -28,7 +28,7 @@ def get_program_name(line):
 def get_file_name(line):
     decoded_line = line.decode('utf-8')
     row = re.split(r'\s+', decoded_line)
-    if re.search('^(open|open64|fopen|fopen64)$', row[12]):
+    if re.search('^(open|open64|fopen|fopen64|freopen)$', row[12]):
         return row[13]
     if re.search('^(openat|fopenat)$', row[12]):
         return row[14]
@@ -38,7 +38,7 @@ def get_file_name(line):
 def get_access_mode(line):
     decoded_line = line.decode('utf-8')
     row = re.split(r'\s+', decoded_line)
-    if re.search('^(open|open64|fopen|fopen64)$', row[12]):
+    if re.search('^(open|open64|fopen|fopen64|freopen)$', row[12]):
         raw_access_mode = row[14]
     elif re.search('^(openat|fopenat)$', row[12]):
         raw_access_mode = row[15]
@@ -51,7 +51,7 @@ def get_access_mode(line):
         # raw_access_mode contains 'O_RDONLY' -> return 'read'
         if 'O_RDONLY' in raw_access_mode:
             return 'read'
-    elif re.search('^(fopen|fopen64|fopenat)$', row[12]):
+    elif re.search('^(fopen|fopen64|fopenat|freopen)$', row[12]):
         # raw_access_mode contains 'w' -> return 'write'
         if 'w' in raw_access_mode:
             return 'write'
@@ -113,6 +113,9 @@ def get_dataflow(project_id):
     node_counter = 1
     raw_log_files = LogFile.query.filter_by(project_id=project.id).all()
     print(f'number of raw log files: {len(raw_log_files)}')
+    files = {}
+    read_ops = {}
+    write_ops = {}
     for index, raw_log in enumerate(raw_log_files):
         print(f'processing log file #{index+1}: {raw_log.file_name}')
         processed_log_file = FilteredFile.query.filter_by(log_file_id=raw_log.id).first()
@@ -120,14 +123,14 @@ def get_dataflow(project_id):
         # for each log file line determine the program, filepath and access mode
         file_path = processed_log_file.filtered_file_path
         programs = {}
-        files = {}
-        read_ops = {}
-        write_ops = {}
         with open(file_path, 'rb') as file:
             for line in file:
                 # check that call is one of open{64,at} or fopen{64,at}
                 if not is_open_call(line):
                     continue
+
+                access_mode = get_access_mode(line)
+                print(f'access_mode: "{access_mode}"')
 
                 program_name_in_log = f'log-{index}##{get_program_name(line)}'
                 if program_name_in_log not in programs:
@@ -137,7 +140,9 @@ def get_dataflow(project_id):
                     nodes.append({ 'id': f'{node_counter}', 'label': program_name_in_log, 'type': 'program', 'data': { 'status': 'null' } })
                     node_counter = node_counter + 1
 
-                file_path_in_log = f'log-{index}##{get_file_name(line)}'
+                # file_path_in_log = f'log-{index}##{get_file_name(line)}'
+                # for files we should not use the prefix 'log-{index}##' or the graph cannot be connected
+                file_path_in_log = f'{get_file_name(line)}'
                 print(f'file_path_in_log: "{file_path_in_log}"')
                 if file_path_in_log not in files:
                     # if file new create a new file node
@@ -146,8 +151,9 @@ def get_dataflow(project_id):
                     nodes.append({ 'id': f'{node_counter}', 'label': file_path_in_log, 'type': 'file', 'data': { 'status': 'null' } })
                     node_counter = node_counter + 1
 
-                access_mode = get_access_mode(line)
-                print(f'access_mode: "{access_mode}"')
+                # TODO handle case that file was accessed already, but with different access mode;
+                #      that is add a node? no, just a reverse edge --> probably hard to make clear
+                #        in visualisation, need some better way (no arrow, other color, ...), thus need to pass back some extra information to frontend
                 if access_mode == 'read':
                     # if access == read, create an edge from the file to the program node
                     # we assume that each log only represents a single program that would read the file
@@ -155,7 +161,11 @@ def get_dataflow(project_id):
                         read_ops[file_path_in_log] = edge_counter
                         edges.append({ 'id': f'ed{edge_counter}', 'source': files[file_path_in_log], 'target': programs[program_name_in_log] })
                         edge_counter = edge_counter + 1
+
                 if access_mode == 'write':
+                    # TODO FIXME if file is openend for both reading and writing create another node for the file and use that as target
+                    #            however that may need that we distinguish the operation in the file_path_in_log, but then this complicates
+                    #            the matching of files between programs
                     # if access == write, create an edge from the program to the file node
                     # we assume that each log only represents a single program that would write the file
                     if file_path_in_log not in write_ops:
