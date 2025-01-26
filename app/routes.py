@@ -1,5 +1,5 @@
 # routes.py
-from flask import request, jsonify, current_app
+from flask import request, jsonify, current_app, send_file, abort
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 from app import app, db, CORS
@@ -404,3 +404,20 @@ def delete_data_file(view_id, file_id):
 
     return jsonify({'message': 'File(s) deleted successfully'}), 200
 
+#@cross_origin()  # This decorator allows CORS specifically for this route
+@app.route('/download/<string:view_name>/<string:file_name>', methods=['GET'])
+def download_file(view_name, file_name):
+    # Fetching the corresponding View entry
+    view_entry = View.query.filter_by(name=view_name).first()
+    if view_entry is None:
+        abort(404, description="View not found")
+
+    # Fetching the corresponding Data entry
+    data_entry = Data.query.filter_by(filepath=file_name, view_id=view_entry.id).first()
+    if data_entry is None:
+        abort(404, description="File not found")
+
+    try:
+        return send_file(data_entry.stored_path, as_attachment=True)
+    except Exception as e:
+        abort(500, description=str(e))
