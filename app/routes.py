@@ -323,3 +323,84 @@ def delete_view(view_id):
     db.session.delete(view)
     db.session.commit()
     return jsonify({'message': 'View deleted successfully'}), 200
+
+@app.route('/data/<string:view_name>', methods=['POST'])
+def upload_data(view_name):
+    if 'files' not in request.files:
+        return jsonify({"error": "No files part in the request"}), 400
+
+    view_id = request.form.get('viewId')
+    if not view_id:
+        return jsonify({"error": "No view Id provided"}), 400
+
+    # check if the view exists
+    view = View.query.filter_by(name=view_name).first()
+    if not view:
+       # create a new view if it does not exist
+       view = View(name=view_name)
+       db.session.add(view)
+       db.session.commit()
+
+    sec_view_name = f"{secure_filename(view_name)}_{view_id}"
+    view_dir = os.path.join(current_app.config['DATA_DIRECTORY'], sec_view_name, 'data')
+    os.makedirs(view_dir, exist_ok=True)
+
+    files = request.files.getlist('files')
+    for file in files:
+        if file.filename == '':
+            return jsonify({'error': 'Filename empty or no selected file'}), 400
+
+        sec_file_path = secure_filename(file.filename)
+        if file:
+            # save file
+            file_path = os.path.join(view_dir, sec_file_path)
+            file.save(file_path)
+
+            #checksum = calculate_checksum(raw_file_path)
+            #processed_time = datetime.datetime.now()
+
+            # save file info to database
+            data_file = Data(
+                view_id = view.id,
+                filepath = sec_file_path,
+                stored_path = file_path,
+                #checksum = checksum,
+                #processed_time = processed_time,
+            )
+            db.session.add(data_file)
+            db.session.commit()
+
+            # trigger background processing
+            #threading.Thread(target=background_processing, args=(log_file.id, filters)).start()
+
+    # TODO provide detailed status, e.g., some files may not have been uploaded
+    return jsonify({"message": "Files uploaded successfully"})
+
+@app.route('/views/<string:view_name>/files', methods=['GET'])
+def get_view_files(view_name):
+    view = View.query.filter_by(name=view_name).first()
+    if not view:
+        return jsonify({"error": "View not found"}), 404
+
+    files = Data.query.filter_by(view_id=view.id).all()
+
+    files_data = [{"id": file.id, "filename": file.filepath} for file in files]
+
+    return jsonify({"view_name": view_name, "files": files_data})
+
+@app.route('/views/<int:view_id>/<int:file_id>', methods=['DELETE'])
+def delete_data_file(view_id, file_id):
+    query = Data.query
+    query = query.filter(Data.view_id == view_id)
+    query = query.filter(Data.id == file_id)
+    files = query.all()
+
+    for file in files:
+      db.session.delete(file)
+      db.session.commit()
+      # unlink file.file_path
+      if os.path.isfile(file.stored_path):
+        os.remove(file.stored_path)
+
+    return jsonify({'message': 'File(s) deleted successfully'}), 200
+
