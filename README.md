@@ -1,2 +1,2 @@
-# vdi-api
+# vdi-backend
 backend for VDI frontend including a REST API, some file storage and a database
